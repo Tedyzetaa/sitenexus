@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Studio Bridge + Aether — IA que cria, automatiza e obedece você</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600&display=swap">
+<style>
+:root{--bg:#f4f5fb;--sf:#fff;--sf2:#eaecf6;--tx:#12162b;--mu:#58607f;--ln:#d6d9ea;--am:#b86a00;--vi:#4655d6;--r:18px;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0a0f1e;--sf:#111a31;--sf2:#18233f;--tx:#e8ecf8;--mu:#97a1c4;--ln:#25325a;--am:#ffb454;--vi:#8b9cff}}
+:root[data-theme="dark"]{--bg:#0a0f1e;--sf:#111a31;--sf2:#18233f;--tx:#e8ecf8;--mu:#97a1c4;--ln:#25325a;--am:#ffb454;--vi:#8b9cff}
+html{scroll-behavior:smooth;scroll-padding-top:70px}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:17px/1.6 "Instrument Sans",system-ui,sans-serif}
+h1,h2,h3{font-family:"Bricolage Grotesque",system-ui,sans-serif;line-height:1.08;margin:0;letter-spacing:-.02em}
+a{color:inherit}
+.w{max-width:1120px;margin:0 auto;padding:0 22px}
+nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--ln)}
+nav .w{display:flex;align-items:center;justify-content:space-between;height:60px}
+nav b{font-family:"Bricolage Grotesque";font-size:20px}
+nav div a{margin-left:20px;text-decoration:none;color:var(--mu);font-size:15px}
+nav div a:hover{color:var(--tx)}
+.btn{display:inline-block;padding:13px 24px;border-radius:999px;font-weight:600;text-decoration:none;border:1px solid var(--ln);transition:transform .2s,box-shadow .2s;cursor:pointer;font:inherit;font-weight:600;color:var(--tx);background:var(--sf)}
+.btn:hover{transform:translateY(-2px)}
+.btn.am{background:var(--am);color:#1a1100;border-color:var(--am)}
+.btn.vi{background:var(--vi);color:#0a0f2a;border-color:var(--vi)}
+.btn:focus-visible,a:focus-visible,.chip:focus-visible{outline:3px solid var(--vi);outline-offset:3px}
+.hero{padding:96px 0 72px;background:radial-gradient(900px 400px at 15% 0,color-mix(in srgb,var(--am) 16%,transparent),transparent),radial-gradient(900px 420px at 90% 10%,color-mix(in srgb,var(--vi) 20%,transparent),transparent)}
+.hero h1{font-size:clamp(40px,7vw,78px);font-weight:800;max-width:14ch}
+.hero p{max-width:56ch;color:var(--mu);font-size:19px;margin:22px 0 32px}
+.row{display:flex;flex-wrap:wrap;gap:14px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:56px}
+.tile{border:1px solid var(--ln);border-radius:var(--r);padding:26px;background:var(--sf);text-decoration:none;transition:border-color .2s,transform .2s}
+.tile:hover{transform:translateY(-3px)}
+.tile.a:hover{border-color:var(--am)}.tile.v:hover{border-color:var(--vi)}
+.tile h3{font-size:24px;margin-bottom:6px}.tile p{margin:0;color:var(--mu);font-size:16px}
+.tag{font-weight:600;font-size:14px}.a .tag{color:var(--am)}.v .tag{color:var(--vi)}
+section{padding:84px 0}
+.head{max-width:62ch;margin-bottom:40px}
+.head h2{font-size:clamp(30px,4.6vw,48px)}
+.head p{color:var(--mu);margin:14px 0 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.card{background:var(--sf);border:1px solid var(--ln);border-radius:12px;padding:22px;transition:border-color .2s,background .2s}
+.card:hover{background:var(--sf2)}
+.s1 .card:hover{border-color:var(--am)}
+.ic{font-size:26px;display:block;margin-bottom:10px}
+.card h3{font-size:19px;margin-bottom:6px}.card p{margin:0;color:var(--mu);font-size:15.5px}
+.engines{display:flex;flex-wrap:wrap;gap:8px;margin-top:30px}
+.engines span{border:1px solid var(--ln);border-radius:999px;padding:5px 14px;font-size:14px;color:var(--mu)}
+.s2{background:var(--sf)}
+.demo{display:grid;grid-template-columns:1fr 1.15fr;gap:28px;align-items:start}
+.panel{border:1px solid var(--ln);border-radius:var(--r);background:var(--bg);padding:24px}
+.panel h3{font-size:20px;margin-bottom:14px}
+.lbl{font-size:14px;color:var(--mu);margin:16px 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1px solid var(--ln);background:var(--sf);color:var(--tx);border-radius:999px;padding:7px 15px;font:inherit;font-size:15px;cursor:pointer;transition:background .2s,border-color .2s}
+.chip[aria-pressed="true"]{background:var(--vi);border-color:var(--vi);color:#0a0f2a;font-weight:600}
+.chat{min-height:210px;display:flex;flex-direction:column;gap:12px}
+.msg{padding:12px 16px;border-radius:14px;max-width:92%;font-size:16px}
+.me{align-self:flex-end;background:var(--sf2)}
+.bot{border:1px solid var(--vi);align-self:flex-start;transition:opacity .25s}
+.meta{font-size:13.5px;color:var(--mu);margin-top:14px}
+.mods{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:34px}
+.mod{border:1px dashed var(--ln);border-radius:10px;padding:12px 14px;font-size:15px;color:var(--mu)}
+.mod b{color:var(--tx);display:block}
+.mod.add{border-color:var(--vi);color:var(--vi)}
+.why .card:hover{border-color:var(--vi)}
+.cta{text-align:center;padding:96px 0;background:radial-gradient(700px 300px at 50% 100%,color-mix(in srgb,var(--vi) 22%,transparent),transparent)}
+.cta h2{font-size:clamp(32px,5vw,56px);max-width:18ch;margin:0 auto 18px}
+.cta p{color:var(--mu);max-width:50ch;margin:0 auto 30px}
+.cta .row{justify-content:center}
+footer{border-top:1px solid var(--ln);padding:28px 0;color:var(--mu);font-size:14.5px}
+footer .w{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px}
+@media(max-width:820px){.two,.demo{grid-template-columns:1fr}nav div a:not(.btn){display:none}.hero{padding-top:60px}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<nav><div class="w"><b>Studio Bridge · Aether</b><div><a href="#studio">Studio Bridge</a><a href="#aether">Aether</a><a href="#why">Vantagens</a><a class="btn vi" style="padding:8px 18px;color:#0a0f2a" href="#contato">Falar com a gente</a></div></div></nav>
+
+<header class="hero"><div class="w">
+<h1>Crie com IA. Automatize tudo. Do seu jeito.</h1>
+<p>Dois sistemas que trabalham juntos: um estúdio que gera imagens, vídeos, áudio, 3D e campanhas completas, e um assistente de IA que você molda por inteiro. Rodam no seu ambiente, com os modelos que você escolher.</p>
+<div class="row"><a class="btn am" href="#studio">Conhecer o Studio Bridge</a><a class="btn vi" href="#aether">Montar meu assistente</a></div>
+<div class="two">
+<a class="tile a" href="#studio"><span class="tag">Sistema 1</span><h3>Studio Bridge</h3><p>Hub multimodal de criação e automação de conteúdo.</p></a>
+<a class="tile v" href="#aether"><span class="tag">Sistema 2</span><h3>Aether, seu assistente de IA</h3><p>Bot modular, 100% personalizável, com modelos locais ou em nuvem.</p></a>
+</div></div></header>
+
+<section id="studio" class="s1"><div class="w">
+<div class="head"><h2>Studio Bridge: um só lugar para todos os seus motores de IA</h2><p>Em vez de alternar entre ferramentas, você envia o pedido e o Bridge escolhe o fluxo certo, organiza a fila de jobs e entrega o resultado.</p></div>
+<div class="grid">
+<div class="card"><span class="ic">🖼️</span><h3>Imagens</h3><p>Geração com fluxos ComfyUI e Fooocus, com estilos e parâmetros que você controla.</p></div>
+<div class="card"><span class="ic">🎬</span><h3>Vídeos</h3><p>Texto ou imagem para vídeo usando Wan, Hunyuan e LTX-Video, em fila de processamento.</p></div>
+<div class="card"><span class="ic">🧊</span><h3>Modelos 3D</h3><p>Do conceito ao modelo 3D, direto do mesmo painel onde você cria o resto.</p></div>
+<div class="card"><span class="ic">🎙️</span><h3>Transcrição e dublagem</h3><p>Whisper transcreve; XTTS sintetiza e clona vozes para dublar em outros idiomas.</p></div>
+<div class="card"><span class="ic">📣</span><h3>Campanhas e anúncios</h3><p>Copywriting, composição visual e mídia gerados em sequência, prontos para publicar.</p></div>
+<div class="card"><span class="ic">🗺️</span><h3>Mapas e utilitários</h3><p>Geração de mapas e ferramentas de apoio para completar o fluxo de produção.</p></div>
+</div>
+<div class="engines" aria-label="Motores integrados"><span>ComfyUI</span><span>Fooocus</span><span>Wan</span><span>Hunyuan</span><span>LTX-Video</span><span>Whisper</span><span>XTTS</span><span>Ollama</span></div>
+</div></section>
+
+<section id="aether" class="s2"><div class="w">
+<div class="head"><h2>Aether: o assistente que você desenha do zero</h2><p>Aether não vem com personalidade pronta. Você define quem ele é, como fala, o que pode fazer e do que se lembra. Teste abaixo.</p></div>
+<div class="demo">
+<div class="panel"><h3>Molde seu assistente</h3>
+<div class="lbl" id="l1">Personalidade</div><div class="chips" data-k="p" role="group" aria-labelledby="l1"><button class="chip" aria-pressed="true" data-v="0">Direto</button><button class="chip" aria-pressed="false" data-v="1">Caloroso</button><button class="chip" aria-pressed="false" data-v="2">Analítico</button></div>
+<div class="lbl" id="l2">Regra de comportamento</div><div class="chips" data-k="r" role="group" aria-labelledby="l2"><button class="chip" aria-pressed="true" data-v="0">Pedir confirmação</button><button class="chip" aria-pressed="false" data-v="1">Agir sozinho</button></div>
+<div class="lbl" id="l3">Memória</div><div class="chips" data-k="m" role="group" aria-labelledby="l3"><button class="chip" aria-pressed="true" data-v="0">Lembrar tudo</button><button class="chip" aria-pressed="false" data-v="1">Esquecer ao fechar</button></div>
+<p class="meta">Tom de voz, integrações e módulos também são seus para ajustar.</p></div>
+<div class="panel"><h3>Prévia da conversa</h3><div class="chat" aria-live="polite">
+<div class="msg me">Reserve minha tarde para o relatório e avise o time.</div>
+<div class="msg bot" id="out"></div></div></div>
+</div>
+<div class="mods"><div class="mod"><b>Painel de controle</b>interativo, no navegador</div><div class="mod"><b>Memória persistente</b>você decide o que guardar</div><div class="mod"><b>Voz</b>reconhecimento e síntese (TTS)</div><div class="mod"><b>Web</b>navegação e automação</div><div class="mod"><b>Ollama</b>modelos locais ou nuvem</div><div class="mod add"><b>Seu módulo</b>handlers extensíveis</div></div>
+</div></section>
+
+<section id="why" class="why"><div class="w">
+<div class="head"><h2>Por que escolher</h2><p>Menos dependência de plataformas, mais controle sobre o que a IA faz e onde seus dados ficam.</p></div>
+<div class="grid">
+<div class="card"><span class="ic">🔒</span><h3>Privacidade</h3><p>Rode com modelos locais e mantenha arquivos, vozes e conversas na sua máquina.</p></div>
+<div class="card"><span class="ic">🧩</span><h3>Várias IAs, uma interface</h3><p>Imagem, vídeo, áudio, texto e voz conectados, sem trocar de ferramenta.</p></div>
+<div class="card"><span class="ic">🎛️</span><h3>Controle total</h3><p>Você ajusta persona, regras, memória e integrações. Nada é imposto.</p></div>
+<div class="card"><span class="ic">⚙️</span><h3>Feito para crescer</h3><p>Arquitetura modular: adicione motores e módulos conforme sua necessidade.</p></div>
+</div></div></section>
+
+<section id="contato" class="cta"><div class="w">
+<h2>Pronto para ter sua própria central de IA?</h2>
+<p>Peça uma demonstração do Studio Bridge, do Aether ou dos dois juntos e veja como encaixam no seu fluxo.</p>
+<div class="row"><a class="btn am" href="mailto:contato@exemplo.com?subject=Quero testar o Studio Bridge">Testar o Studio Bridge</a><a class="btn vi" href="mailto:contato@exemplo.com?subject=Quero adquirir o Aether">Adquirir o Aether</a></div>
+</div></section>
+
+<footer><div class="w"><span>© 2026 Studio Bridge &amp; Aether</span><span>contato@exemplo.com</span></div></footer>
+
+<script>
+const T={
+p:[["Feito.","Direto ao ponto: "],["Claro! Já cuido disso para você.","Com prazer: "],["Entendido. Analisei sua agenda e","Resumo da análise: "]],
+r:["antes de enviar o aviso ao time, confirma o texto comigo?","bloqueei a tarde e já avisei o time."],
+m:["Anotei que você prefere trabalhar no relatório à tarde.","Nada será guardado depois desta sessão."]};
+const s={p:0,r:0,m:0},out=document.getElementById("out");
+function show(){out.style.opacity=0;setTimeout(()=>{out.textContent=T.p[s.p][1]+T.r[s.r]+" "+T.m[s.m];out.style.opacity=1},180)}
+document.querySelectorAll(".chips").forEach(g=>g.addEventListener("click",e=>{const b=e.target.closest(".chip");if(!b)return;g.querySelectorAll(".chip").forEach(c=>c.setAttribute("aria-pressed",c===b));s[g.dataset.k]=+b.dataset.v;show()}));
+out.textContent=T.p[0][1]+T.r[0]+" "+T.m[0];
+</script>
+</body>
+</html>
