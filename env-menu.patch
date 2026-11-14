@@ -1,0 +1,704 @@
+diff -ruN '--exclude=__pycache__' -x '*.pyc' sn/aether/bot/aether/app.py work/bot/aether/app.py
+--- a/bot/aether/app.py	2026-11-13 22:28:02.000000000 +0000
++++ b/bot/aether/app.py	2026-11-14 22:04:05.870458685 +0000
+@@ -103,7 +103,7 @@
+         ("video", h.cmd_video),
+         ("code", h.admin_only(h.cmd_code)),  # agente de codigo: so admins
+         ("cancelar", panel.cmd_cancel),
+-        ("admin", panel.cmd_admin),
++        ("admin", panel.cmd_admin), ("env", panel.cmd_env),
+         ("diretriz", h.cmd_directive), ("diretrizes", h.cmd_directives),
+         ("remover", h.cmd_remove), ("limpar_diretrizes", h.cmd_clear_directives),
+         ("sistema", h.cmd_system), ("modelo", h.cmd_model), ("temperatura", h.cmd_temperature),
+diff -ruN '--exclude=__pycache__' -x '*.pyc' sn/aether/bot/aether/config.py work/bot/aether/config.py
+--- a/bot/aether/config.py	2026-11-14 01:03:40.000000000 +0000
++++ b/bot/aether/config.py	2026-11-14 22:01:49.756231052 +0000
+@@ -108,8 +108,15 @@
+ 
+ def load_settings(env_file: Path | None = None) -> Settings:
+     load_dotenv(env_file or (BASE_DIR / ".env"))
+-    g = os.environ.get
++    return settings_from_getter(os.environ.get)
+ 
++
++def settings_from_getter(g) -> Settings:
++    """Monta e valida o Settings a partir de qualquer `g(chave, padrao=None)` (os.environ.get, dict.get...).
++
++    O painel de admin usa isto para testar um .env candidato com as MESMAS regras da partida do bot,
++    sem tocar em os.environ.
++    """
+     token = (g("TELEGRAM_BOT_TOKEN") or "").strip()
+     if not token:
+         raise ConfigError("TELEGRAM_BOT_TOKEN ausente no .env.")
+diff -ruN '--exclude=__pycache__' -x '*.pyc' sn/aether/bot/aether/envfile.py work/bot/aether/envfile.py
+--- a/bot/aether/envfile.py	1970-01-01 00:00:00.000000000 +0000
++++ b/bot/aether/envfile.py	2026-11-14 22:05:13.700720787 +0000
+@@ -0,0 +1,278 @@
++"""Leitura, validacao e gravacao segura do .env para o painel de administracao (sem Telegram aqui).
++
++Principios:
++- O que o painel mostra e o que o bot le: o parser e o do python-dotenv (o mesmo do config.py).
++- Nenhum valor e salvo sem passar pelas MESMAS regras da partida do bot (`settings_from_getter`), entao o
++  painel nao consegue gravar algo que impeca o bot de subir de novo.
++- Toda gravacao e atomica (arquivo temporario + os.replace), preserva comentarios/ordem e deixa um
++  backup (`.env.panel-bak`) para o botao "Desfazer".
++"""
++from __future__ import annotations
++
++import io
++import os
++import re
++import shutil
++import tempfile
++from dataclasses import dataclass
++from pathlib import Path
++
++from dotenv import dotenv_values
++
++from .config import BASE_DIR, ConfigError, parse_ids, settings_from_getter
++
++ENV_PATH = BASE_DIR / ".env"
++EXAMPLE_PATH = BASE_DIR / ".env.example"
++BACKUP_NAME = ".env.panel-bak"
++
++REQUIRED = frozenset({"TELEGRAM_BOT_TOKEN", "ALLOWED_USER_IDS"})
++ID_KEYS = frozenset({"ALLOWED_USER_IDS", "ADMIN_USER_IDS"})
++BOOL_KEYS = frozenset({"NEXUS_ENABLED", "NEXUS_AUTO_INTENT", "TTS_SEND_TEXT", "TTS_DEFAULT_ON"})
++URL_KEYS = frozenset({"OLLAMA_HOST", "NEXUS_URL"})
++SECRET_HINTS = ("TOKEN", "KEY", "SECRET", "PASSWORD")
++
++_TRUE = {"1", "true", "yes", "sim", "on"}
++_FALSE = {"0", "false", "no", "nao", "não", "off"}
++_TOKEN_RE = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{30,}$")
++_URL_RE = re.compile(r"^https?://[^\s/]+\S*$", re.I)
++_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
++_LINE_KEY_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
++# Caracteres que o python-dotenv, o launcher (grep) e o instalador interpretam de formas diferentes:
++# espaco, '#', aspas, barra invertida e '$' (interpolacao). Nenhuma chave legitima precisa deles.
++_BAD_CHARS = re.compile(r"[\s#\"'\\$]")
++
++
++class EnvError(ValueError):
++    """Valor recusado. A mensagem ja e legivel para o usuario final."""
++
++
++@dataclass(frozen=True)
++class EnvKey:
++    name: str
++    value: str            # "" se vazia ou ausente
++    in_env: bool          # existe uma linha para ela no .env
++    default: str | None   # valor em .env.example (None se a chave nao esta no exemplo)
++    help: str             # comentario que antecede a chave no .env.example
++    secret: bool
++
++    @property
++    def is_new(self) -> bool:
++        """No .env.example mas ainda nao no .env (chave que chegou com uma atualizacao)."""
++        return self.default is not None and not self.in_env
++
++
++# --- leitura ---------------------------------------------------------------------------
++def is_secret(key: str) -> bool:
++    k = key.upper()
++    return any(h in k for h in SECRET_HINTS)
++
++
++def parse_env_text(text: str) -> dict[str, str]:
++    vals = dotenv_values(stream=io.StringIO(text.lstrip("\ufeff")))
++    return {k: (v or "") for k, v in vals.items()}
++
++
++def read_env(path: Path | None = None) -> dict[str, str]:
++    path = path or ENV_PATH
++    try:
++        return parse_env_text(path.read_text(encoding="utf-8", errors="replace"))
++    except FileNotFoundError:
++        return {}
++
++
++def read_example(path: Path | None = None) -> tuple[dict[str, str], dict[str, str]]:
++    """(valores, ajuda) do .env.example, na ordem do arquivo. A ajuda e o bloco de '#' logo acima da chave."""
++    path = path or EXAMPLE_PATH
++    try:
++        text = path.read_text(encoding="utf-8", errors="replace").lstrip("\ufeff")
++    except FileNotFoundError:
++        return {}, {}
++    values = parse_env_text(text)
++    helps: dict[str, str] = {}
++    buf: list[str] = []
++    for raw in text.splitlines():
++        line = raw.strip()
++        if not line:
++            buf = []
++        elif line.startswith("#"):
++            body = line.lstrip("#").strip()
++            if re.match(r"^-{2,}", body):   # cabecalho de secao: "# --- Telegram ---"
++                buf = []
++            elif body:
++                buf.append(body)
++        else:
++            m = _LINE_KEY_RE.match(line)
++            if m:
++                helps[m.group(1)] = " ".join(buf)
++            buf = []
++    return values, helps
++
++
++def list_keys(env_path: Path | None = None, example_path: Path | None = None) -> list[EnvKey]:
++    """Todas as chaves: primeiro as do .env.example (na ordem dele), depois as extras que so existem no .env."""
++    env = read_env(env_path)
++    ex_vals, ex_help = read_example(example_path)
++    out: list[EnvKey] = []
++    for name, default in ex_vals.items():
++        out.append(EnvKey(name, env.get(name, ""), name in env, default, ex_help.get(name, ""), is_secret(name)))
++    for name, value in env.items():
++        if name not in ex_vals:
++            out.append(EnvKey(name, value, True, None, "", is_secret(name)))
++    return out
++
++
++def mask(key: str, value: str, limit: int = 40) -> str:
++    if not value:
++        return "(vazio)"
++    if is_secret(key):
++        return f"{value[:4]}…{value[-2:]}" if len(value) > 12 else "••••"
++    return value if len(value) <= limit else value[: limit - 1] + "…"
++
++
++# --- validacao -------------------------------------------------------------------------
++def hint(key: str) -> str:
++    if key in ID_KEYS:
++        return "IDs numéricos do Telegram separados por vírgula (ex.: 123456789,987654321)"
++    if key in BOOL_KEYS:
++        return "true ou false"
++    if key in URL_KEYS:
++        return "endereço completo, ex.: http://127.0.0.1:11434"
++    if key == "TELEGRAM_BOT_TOKEN":
++        return "token do @BotFather (ex.: 123456789:AAE…)"
++    return ""
++
++
++def prepare_value(key: str, raw: str, *, editor_id: int, current: dict[str, str]) -> str:
++    """Normaliza e valida `raw` como novo valor de `key`. Devolve o texto a gravar ou levanta EnvError.
++
++    `current` e o .env atual (dict). `editor_id` e quem esta editando (para nao se trancar para fora).
++    """
++    if not _KEY_RE.match(key):
++        raise EnvError(f"Nome de variável inválido: {key}")
++    value = (raw or "").strip()
++    if not value and key in REQUIRED:
++        raise EnvError(f"{key} é obrigatória e não pode ficar vazia.")
++
++    if value:
++        if key in ID_KEYS:
++            try:
++                ids = parse_ids(value, key)
++            except ConfigError as exc:
++                raise EnvError(str(exc)) from None
++            value = ",".join(str(i) for i in sorted(ids))
++        elif key in BOOL_KEYS:
++            low = value.lower()
++            if low in _TRUE:
++                value = "true"
++            elif low in _FALSE:
++                value = "false"
++            else:
++                raise EnvError("Use true ou false.")
++        elif key in URL_KEYS:
++            if not _URL_RE.match(value):
++                raise EnvError("Endereço inválido: comece com http:// ou https://")
++            value = value.rstrip("/")
++        elif key == "TELEGRAM_BOT_TOKEN":
++            if not _TOKEN_RE.match(value):
++                raise EnvError("Formato de token inválido (esperado algo como 123456789:AAE…).")
++        if _BAD_CHARS.search(value):
++            raise EnvError("O valor não pode ter espaços, # , aspas, \\ ou $ (o .env interpretaria errado).")
++
++    candidate = {**current, key: value}
++
++    # Trancar o proprio admin para fora seria irreversivel pelo Telegram.
++    if key == "ALLOWED_USER_IDS" and editor_id not in parse_ids(value, key):
++        raise EnvError("Você ficaria fora da whitelist e perderia o acesso. Inclua seu próprio ID.")
++    if key == "ADMIN_USER_IDS" and value:
++        ids = parse_ids(value, key)
++        if editor_id not in ids:
++            raise EnvError("Você ficaria sem acesso de admin. Inclua seu próprio ID.")
++        allowed = parse_ids(candidate.get("ALLOWED_USER_IDS", ""), "ALLOWED_USER_IDS")
++        outside = sorted(ids - allowed)
++        if outside:
++            raise EnvError(f"IDs fora da whitelist: {', '.join(map(str, outside))}. Adicione-os antes em ALLOWED_USER_IDS.")
++
++    # Mesmas regras da partida do bot: se isto passa, o bot sobe.
++    try:
++        settings_from_getter(candidate.get)
++    except ConfigError as exc:
++        raise EnvError(str(exc)) from None
++    return value
++
++
++# --- gravacao --------------------------------------------------------------------------
++def write_env(updates: dict[str, str], path: Path | None = None) -> None:
++    """Aplica `updates` ao .env: troca a linha da chave (removendo duplicatas) ou acrescenta no fim.
++
++    Mantem comentarios e ordem. Faz backup antes e grava de forma atomica.
++    """
++    path = path or ENV_PATH
++    for k in updates:
++        if not _KEY_RE.match(k):
++            raise EnvError(f"Nome de variável inválido: {k}")
++    try:
++        text = path.read_text(encoding="utf-8")
++    except FileNotFoundError:
++        text = ""
++    else:
++        backup = path.with_name(BACKUP_NAME)
++        shutil.copy2(path, backup)
++        _chmod600(backup)
++
++    pending = dict(updates)
++    out: list[str] = []
++    for line in text.splitlines():
++        m = _LINE_KEY_RE.match(line)
++        if m and m.group(1) in updates:
++            key = m.group(1)
++            if key in pending:                  # primeira ocorrencia: substitui
++                out.append(f"{key}={pending.pop(key)}")
++            continue                            # ocorrencias repetidas: descarta
++        out.append(line)
++    for key, value in pending.items():
++        out.append(f"{key}={value}")
++    new_text = "\n".join(out).rstrip("\n") + "\n"
++
++    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".env.", suffix=".tmp")
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
++            fh.write(new_text)
++        _chmod600(Path(tmp))
++        os.replace(tmp, path)
++    except OSError:
++        try:
++            os.unlink(tmp)
++        except OSError:
++            pass
++        raise
++
++
++def has_backup(path: Path | None = None) -> bool:
++    return (path or ENV_PATH).with_name(BACKUP_NAME).is_file()
++
++
++def restore_backup(path: Path | None = None) -> bool:
++    """Volta o .env para o estado anterior a ultima alteracao feita pelo painel."""
++    path = path or ENV_PATH
++    backup = path.with_name(BACKUP_NAME)
++    if not backup.is_file():
++        return False
++    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".env.", suffix=".tmp")
++    os.close(fd)
++    try:
++        shutil.copyfile(backup, tmp)
++        _chmod600(Path(tmp))
++        os.replace(tmp, path)
++    finally:
++        try:
++            os.unlink(tmp)
++        except OSError:
++            pass
++    return True
++
++
++def _chmod600(p: Path) -> None:
++    try:
++        p.chmod(0o600)
++    except OSError:
++        pass
+diff -ruN '--exclude=__pycache__' -x '*.pyc' sn/aether/bot/aether/panel.py work/bot/aether/panel.py
+--- a/bot/aether/panel.py	2026-11-13 22:28:02.000000000 +0000
++++ b/bot/aether/panel.py	2026-11-14 22:07:33.352766739 +0000
+@@ -9,19 +9,22 @@
+ Convencao de callback_data (limite do Telegram: 64 bytes):
+   m:<tela>            menu principal (main | status | help | reset)
+   t:<acao>[:<arg>]    ferramentas (l=lista/pagina, o=abrir, r=executar, a=argumentos, f=pedido livre, u=atualizar)
+-  a:<acao>[:<args>]   admin
++  a:<acao>[:<args>]   admin (a:env*, a:ev/ee/ed/ex/eu/er/ery = editor de variaveis do .env)
+   x:<destino>         cancela uma entrada pendente e volta para a tela
+ """
+ from __future__ import annotations
+ 
++import asyncio
+ import contextlib
+ import html
+ import logging
++import os
+ import re
+ import time
+ import zlib
+ from dataclasses import dataclass
+ 
++import httpx
+ from telegram import InlineKeyboardButton as Btn
+ from telegram import InlineKeyboardMarkup as Kb
+ from telegram import Update
+@@ -29,6 +32,7 @@
+ from telegram.error import BadRequest, NetworkError
+ from telegram.ext import ApplicationHandlerStop, ContextTypes
+ 
++from . import envfile
+ from . import handlers as h
+ from .nexus import NexusError
+ from .ollama_client import OllamaError
+@@ -40,6 +44,9 @@
+ TOOLS_TTL = 300        # cache da lista de ferramentas do Nexus
+ TOOLS_PER_PAGE = 8
+ MODELS_PER_PAGE = 6
++ENV_PER_PAGE = 8
++# O launcher (start.sh) religa o bot quando ele sai com qualquer codigo fora de 0/130/143/2.
++RESTART_EXIT_CODE = 3
+ 
+ Screen = tuple[str, Kb]
+ 
+@@ -125,6 +132,7 @@
+         text += (
+             "\n\n<b>Administração</b>\n"
+             "/admin — painel com botões\n"
++            "/env — variáveis do .env (ver e editar)\n"
+             "Atalhos: /diretriz &lt;texto&gt; · /diretrizes · /remover &lt;n&gt; · /limpar_diretrizes · "
+             "/sistema · /modelo [nome] · /temperatura [0-2]"
+         )
+@@ -155,7 +163,7 @@
+     Tool("clima", "Previsão do tempo", "<cidade UF>"),
+     Tool("noaa", "Dados NOAA (ex.: índice Kp)", "[kp]"),
+ )
+-_SELF_COMMANDS = {"ferramentas", "ajuda", "help", "start", "menu", "reset", "status", "nexus", "admin", "cancelar", "video"}
++_SELF_COMMANDS = {"ferramentas", "ajuda", "help", "start", "menu", "reset", "status", "nexus", "admin", "env", "cancelar", "video"}
+ _TOOL_TOKEN = re.compile(r"(?<![\w/:.])/([A-Za-z_]\w{1,30})\b")
+ _ARG_HINT = re.compile(r"[<\[][^<>\[\]]*[>\]]")
+ _NAME_OK = re.compile(r"^\w{1,31}$")
+@@ -266,6 +274,7 @@
+         [Btn("🤖 Modelo", callback_data="a:model:0"), Btn("🌡 Temperatura", callback_data="a:temp")],
+         [Btn("📜 Diretrizes", callback_data="a:dirs"), Btn("➕ Nova diretriz", callback_data="a:new")],
+         [Btn("🧠 Prompt do sistema", callback_data="a:prompt"), Btn("📊 Status", callback_data="a:status")],
++        [Btn("🔐 Variáveis (.env)", callback_data="a:env:0")],
+         [Btn("🧹 Limpar contexto", callback_data="a:reset"), Btn("⬅️ Menu", callback_data="m:main")],
+     ]
+     return text, Kb(rows)
+@@ -339,6 +348,146 @@
+     return text, Kb(rows)
+ 
+ 
++# --- Variaveis de ambiente (.env) -------------------------------------------------------
++def _supervised() -> bool:
++    """True se o bot roda sob o launcher (start.sh/start.bat exportam AETHER_SUPERVISED e religam o processo)."""
++    return bool(os.environ.get("AETHER_SUPERVISED"))
++
++
++def _env_resolve(idx_s: str, crc: str) -> tuple[int, envfile.EnvKey] | None:
++    """(indice, chave) se o botao ainda aponta para a mesma chave; None se a lista mudou."""
++    keys = envfile.list_keys()
++    if idx_s.isdigit() and int(idx_s) < len(keys) and _crc(keys[int(idx_s)].name) == crc:
++        return int(idx_s), keys[int(idx_s)]
++    return None
++
++
++def screen_env(deps: h.Deps, page: int = 0, notice: str = "") -> Screen:
++    keys = envfile.list_keys()
++    pages = max(1, -(-len(keys) // ENV_PER_PAGE))
++    page = min(max(page, 0), pages - 1)
++    start = page * ENV_PER_PAGE
++    chunk = keys[start : start + ENV_PER_PAGE]
++    new = sum(1 for k in keys if k.is_new)
++
++    head = f"🔐 <b>Variáveis de ambiente</b> — {len(keys)} chaves"
++    if new:
++        head += f" · 🆕 {new} nova(s)"
++    parts = []
++    if notice:
++        parts.append(notice)
++    if deps.cache.get("env_dirty"):
++        parts.append("⚠️ <b>Alterações pendentes</b> — reinicie o bot para aplicar.")
++    parts.append(head)
++    lines = []
++    for k in chunk:
++        mark = "🆕" if k.is_new else ("🔒" if k.secret else "▫️")
++        val = "<i>(padrão do bot)</i>" if k.is_new else f"<code>{_esc(envfile.mask(k.name, k.value))}</code>"
++        lines.append(f"{mark} <code>{_esc(k.name)}</code> = {val}")
++    parts.append("\n".join(lines) if lines else "<i>Nenhuma variável encontrada.</i>")
++    parts.append("<i>Toque numa chave para ver ou alterar. Segredos aparecem mascarados.</i>")
++
++    buttons = [
++        Btn(_short(f"{'🆕 ' if k.is_new else ''}{k.name}", 30), callback_data=f"a:ev:{start + i}:{_crc(k.name)}")
++        for i, k in enumerate(chunk)
++    ]
++    rows = _chunk(buttons, 2)
++    if pages > 1:
++        rows.append(_pager("a:env", page, pages))
++    tools = [Btn("🔄 Reiniciar bot", callback_data="a:er")]
++    if envfile.has_backup():
++        tools.insert(0, Btn("↩️ Desfazer última", callback_data="a:eu"))
++    rows.append(tools)
++    rows.append([Btn("⬅️ Admin", callback_data="a:home")])
++    return "\n\n".join(parts), Kb(rows)
++
++
++def screen_env_key(deps: h.Deps, idx: int, k: envfile.EnvKey, notice: str = "") -> Screen:
++    lines = []
++    if notice:
++        lines.append(notice + "\n")
++    lines.append(f"🔐 <b>{_esc(k.name)}</b>{' 🔒' if k.secret else ''}")
++    if k.is_new:
++        lines.append("Valor atual: <i>não definida — o bot usa o padrão interno</i>")
++    else:
++        lines.append(f"Valor atual: <code>{_esc(envfile.mask(k.name, k.value))}</code>")
++    show_default = k.default and not k.secret
++    if show_default:
++        lines.append(f"No .env.example: <code>{_esc(k.default)}</code>")
++    if k.help:
++        lines.append(f"\n<i>{_esc(k.help)}</i>")
++    fmt = envfile.hint(k.name)
++    if fmt:
++        lines.append(f"Formato: {_esc(fmt)}")
++    lines.append("\n⚠️ A mudança só vale depois de reiniciar o bot.")
++
++    ref = f"{idx}:{_crc(k.name)}"
++    rows = [[Btn("✏️ Alterar", callback_data=f"a:ee:{ref}")]]
++    extra = []
++    if show_default and k.value != k.default:
++        extra.append(Btn("↩️ Usar o do exemplo", callback_data=f"a:ed:{ref}"))
++    if k.in_env and k.value and k.name not in envfile.REQUIRED:
++        extra.append(Btn("🗑 Limpar", callback_data=f"a:ex:{ref}"))
++    if extra:
++        rows.append(extra)
++    rows.append([Btn("⬅️ Variáveis", callback_data=f"a:env:{idx // ENV_PER_PAGE}")])
++    return "\n".join(lines), Kb(rows)
++
++
++def screen_env_restart(deps: h.Deps) -> Screen:
++    back = [Btn("⬅️ Variáveis", callback_data="a:env:0")]
++    if not _supervised():
++        launcher = "start.bat" if os.name == "nt" else "start.sh"
++        how = (
++            "Feche a janela do bot e abra de novo (ícone na área de trabalho ou <code>start.bat</code>)."
++            if os.name == "nt"
++            else "Reinicie manualmente no Termux:\n<code>bash start.sh stop &amp;&amp; bash start.sh silent</code>"
++        )
++        text = (
++            f"🔄 <b>Reiniciar o bot</b>\n\nEste bot não foi iniciado pelo <code>{launcher}</code>, "
++            f"então não consigo religá-lo sozinho. {how}"
++        )
++        return text, Kb([back])
++    busy = len(deps.video_active) + len(deps.code_active)
++    text = "🔄 <b>Reiniciar o bot agora?</b>\n\nEle volta em cerca de 10 segundos."
++    if busy:
++        text += f"\n⚠️ Há {busy} tarefa(s) em andamento (/video ou /code) que serão interrompidas."
++    rows = [[Btn("✅ Sim, reiniciar", callback_data="a:ery"), Btn("❌ Cancelar", callback_data="a:env:0")]]
++    return text, Kb(rows)
++
++
++_restarting = False
++
++
++def request_restart(delay: float = 1.5) -> None:
++    """Encerra o processo com RESTART_EXIT_CODE; o start.sh o religa. Idempotente (toque duplo)."""
++    global _restarting
++    if _restarting:
++        return
++    _restarting = True
++    log.warning("Reinicio solicitado pelo painel de administracao.")
++
++    def _go() -> None:
++        logging.shutdown()
++        os._exit(RESTART_EXIT_CODE)
++
++    asyncio.get_running_loop().call_later(delay, _go)
++
++
++async def _verify_token(token: str) -> None:
++    """Confere o token novo no Telegram ANTES de salvar (token errado = bot que nao volta apos reiniciar)."""
++    try:
++        async with httpx.AsyncClient(timeout=10.0) as cli:
++            resp = await cli.get(f"https://api.telegram.org/bot{token}/getMe")
++    except httpx.HTTPError:  # sem log/mensagem do erro: a URL contem o token
++        raise envfile.EnvError("Não consegui falar com o Telegram para validar o token agora. Nada foi salvo.") from None
++    if resp.status_code == 200:
++        return
++    if resp.status_code in (401, 404):
++        raise envfile.EnvError("O Telegram recusou esse token. Nada foi salvo.")
++    raise envfile.EnvError(f"O Telegram respondeu {resp.status_code} ao validar o token. Nada foi salvo.")
++
++
+ # =======================================================================================
+ #  COMANDOS (abrem as telas como mensagem nova)
+ # =======================================================================================
+@@ -380,6 +529,16 @@
+     await _send(update, screen_admin(h._deps(context), update.effective_chat.id))
+ 
+ 
++@h.admin_only
++async def cmd_env(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
++    _clear_pending(context)
++    chat = update.effective_chat
++    if chat is None or chat.type != "private":
++        await update.effective_message.reply_text("🔐 Por segurança, use /env no chat privado comigo.")
++        return
++    await _send(update, screen_env(h._deps(context)))
++
++
+ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+     had = context.user_data.pop("pending", None)
+     await update.effective_message.reply_text("Cancelado." if had else "Nada pendente.")
+@@ -474,11 +633,82 @@
+         await c.ack("Botão expirado — reabra com /ferramentas", alert=True)
+ 
+ 
++_ENV_ACTIONS = frozenset({"env", "ev", "ee", "ed", "ex", "eu", "er", "ery"})
++
++
++async def _cb_env(c: _Cb, action: str, val: str) -> None:
++    """Editor de variaveis do .env (so admin, so chat privado: o valor digitado pode ser um segredo)."""
++    deps = c.deps
++    if c.q.message is None or c.q.message.chat.type != "private":
++        await c.ack("Por segurança, o editor de .env só funciona no chat privado com o bot.", alert=True)
++        return
++
++    if action == "env":
++        _clear_pending(c.context)
++        await c.show(screen_env(deps, int(val) if val.isdigit() else 0))
++        return
++    if action == "eu":
++        if envfile.restore_backup():
++            deps.cache["env_dirty"] = True
++            await c.ack("↩️ .env anterior restaurado")
++            await c.show(screen_env(deps, 0, "↩️ Última alteração desfeita."))
++        else:
++            await c.ack("Não há alteração para desfazer.", alert=True)
++            await c.show(screen_env(deps, 0))
++        return
++    if action == "er":
++        await c.show(screen_env_restart(deps))
++        return
++    if action == "ery":
++        if not _supervised():
++            await c.ack("O bot não está sob o start.sh; reinicie manualmente.", alert=True)
++            return
++        await c.show(("🔄 <b>Reiniciando…</b>\n\nVolto em cerca de 10 segundos. Se não responder, veja logs/bot.log.", Kb([])))
++        request_restart()
++        return
++
++    idx_s, _, crc = val.partition(":")
++    found = _env_resolve(idx_s, crc)
++    if found is None:
++        await c.ack("A lista mudou — atualizei.")
++        await c.show(screen_env(deps, 0))
++        return
++    idx, key = found
++
++    if action == "ev":
++        _clear_pending(c.context)
++        await c.show(screen_env_key(deps, idx, key))
++    elif action == "ee":
++        _set_pending(c.context, "env", key=key.name, chat_id=c.chat_id, idx=idx)
++        text = f"✏️ <b>{_esc(key.name)}</b>\n\nEnvie o novo valor na <b>próxima mensagem</b>."
++        fmt = envfile.hint(key.name)
++        if fmt:
++            text += f"\nFormato: {_esc(fmt)}"
++        if key.secret:
++            text += "\n🔒 Vou apagar a sua mensagem logo depois de ler."
++        await c.show((text, Kb([[Btn("❌ Cancelar", callback_data="x:env")]])))
++    elif action in {"ed", "ex"}:  # usar o valor do .env.example / limpar
++        raw = (key.default or "") if action == "ed" else ""
++        try:
++            value = envfile.prepare_value(key.name, raw, editor_id=c.q.from_user.id, current=envfile.read_env())
++            envfile.write_env({key.name: value})
++        except (envfile.EnvError, OSError) as exc:
++            await c.ack(f"⚠️ {exc}"[:190], alert=True)
++            return
++        deps.cache["env_dirty"] = True
++        await c.ack("Salvo — reinicie para aplicar")
++        fresh = _env_resolve(str(idx), crc)
++        await c.show(screen_env_key(deps, idx, fresh[1] if fresh else key, "✅ Salvo."))
++
++
+ async def _cb_admin(c: _Cb, arg: str) -> None:
+     deps, st = c.deps, c.deps.state
+     action, _, val = arg.partition(":")
+ 
+-    if action == "home":
++    if action in _ENV_ACTIONS:
++        await _cb_env(c, action, val)
++
++    elif action == "home":
+         _clear_pending(c.context)
+         await c.show(screen_admin(deps, c.chat_id))
+ 
+@@ -564,6 +794,8 @@
+     await c.ack("Cancelado")
+     if arg == "dirs" and c.admin:
+         await c.show(screen_dirs(c.deps))
++    elif arg == "env" and c.admin:
++        await c.show(screen_env(c.deps))
+     elif arg == "tools":
+         await c.show(await screen_tools(c.deps))
+     else:
+@@ -597,8 +829,40 @@
+ # =======================================================================================
+ #  TEXTO LIVRE QUANDO HA ENTRADA PENDENTE
+ # =======================================================================================
++async def _apply_env_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict, raw: str) -> None:
++    deps = h._deps(context)
++    msg, chat, key = update.effective_message, update.effective_chat, pending["key"]
++    idx = int(pending.get("idx", 0))
++    with contextlib.suppress(Exception):  # o valor pode ser um segredo: some do historico do chat
++        await msg.delete()
++    back = Btn("🔐 Variáveis", callback_data=f"a:env:{idx // ENV_PER_PAGE}")
++    try:
++        value = envfile.prepare_value(
++            key, raw, editor_id=update.effective_user.id, current=envfile.read_env()
++        )
++        if key == "TELEGRAM_BOT_TOKEN":
++            await _verify_token(value)
++        envfile.write_env({key: value})
++    except (envfile.EnvError, OSError) as exc:
++        kb = Kb([[Btn("🔁 Tentar de novo", callback_data=f"a:ee:{idx}:{_crc(key)}"), back]])
++        await context.bot.send_message(chat.id, f"⚠️ {_esc(exc)}", parse_mode=ParseMode.HTML, reply_markup=kb)
++        return
++    deps.cache["env_dirty"] = True
++    shown = _esc(envfile.mask(key, value))
++    kb = Kb([[Btn("🔄 Reiniciar agora", callback_data="a:er"), back]])
++    await context.bot.send_message(
++        chat.id,
++        f"✅ <code>{_esc(key)}</code> salvo: <code>{shown}</code>\n⚠️ Reinicie o bot para aplicar.",
++        parse_mode=ParseMode.HTML, reply_markup=kb,
++    )
++
++
+ async def on_pending_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+     """Registrado antes do on_text. Sem pendencia (ou expirada) nao faz nada e a conversa segue."""
++    peek = context.user_data.get("pending")
++    chat = update.effective_chat
++    if peek and peek.get("kind") == "env" and (chat is None or chat.id != peek.get("chat_id")):
++        return  # valor de .env so e aceito no mesmo chat privado onde foi pedido (nunca em grupo)
+     pending = context.user_data.pop("pending", None)
+     msg = update.effective_message
+     if not pending or msg is None or not msg.text:
+@@ -619,6 +883,10 @@
+             await msg.reply_text(f"⚠️ {exc}", reply_markup=kb)
+         else:
+             await msg.reply_text(f"✅ Diretriz #{n} ativa.", reply_markup=kb)
++    elif kind == "env":
++        if not _is_admin(deps, update.effective_user.id if update.effective_user else None):
++            raise ApplicationHandlerStop
++        await _apply_env_edit(update, context, pending, text)
+     elif kind == "tool":
+         await h._run_nexus(update, context, f"/{pending['tool']} {text}")
+     elif kind == "free":
+diff -ruN '--exclude=__pycache__' -x '*.pyc' sn/aether/installer.py work/installer.py
+--- a/installer.py	2026-11-14 01:03:40.000000000 +0000
++++ b/installer.py	2026-11-14 22:04:05.871397590 +0000
+@@ -1256,6 +1256,7 @@
+     local STOP=0 CHILD="" RC=0
+     trap 'rm -f "$PIDFILE"' EXIT
+     trap 'STOP=1; [ -n "$CHILD" ] && kill -TERM "$CHILD" 2>/dev/null' INT TERM
++    export AETHER_SUPERVISED=1   # o painel (/env) so oferece "Reiniciar" quando ha este supervisor para religar o bot
+     while [ "$STOP" = 0 ]; do
+         echo
+         echo "[*] Bot iniciando - Ctrl+C para parar"
