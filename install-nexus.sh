@@ -5,7 +5,7 @@
 #  Instalar direto do GitHub (um comando):
 #    curl -fsSL https://raw.githubusercontent.com/Tedyzetaa/sitenexus/main/install-nexus.sh | bash
 #  Com opcoes:
-#    curl -fsSL https://raw.githubusercontent.com/Tedyzetaa/sitenexus/main/install-nexus.sh | bash -s -- --boot --porta 8666
+#    curl -fsSL https://raw.githubusercontent.com/Tedyzetaa/sitenexus/main/install-nexus.sh | bash -s -- --boot --porta 1666
 #
 #  Ou baixado:   bash install-nexus.sh [opcoes]      (bash install-nexus.sh --help)
 #
@@ -31,7 +31,7 @@ export PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL-https://termux-user-repository
 # ---------------- padroes (mude por opcao) ----------------
 PYVER="3.11"
 DIR="$HOME/nexus-bridge"
-PORT=8666              # Android nao deixa o Termux abrir portas < 1024
+PORT=1666              # Android nao deixa o Termux abrir portas < 1024
 HOST="127.0.0.1"       # --rede = 0.0.0.0 (exige token)
 OLLAMA_MODE=""         # local | remoto | pular  (vazio = pergunta)
 OLLAMA_URL=""
@@ -65,7 +65,7 @@ Nexus-Bridge - instalador Termux (Python 3.11)
   install-nexus.sh [opcoes]
 
   --dir PASTA         onde instalar (padrao: ~/nexus-bridge)
-  --porta N           porta do servidor (padrao: 8666; portas < 1024 nao funcionam no Android)
+  --porta N           porta do servidor (padrao: 1666; portas < 1024 nao funcionam no Android)
   --python X.Y        versao do Python (padrao: 3.11; o Termux tem 3.10, 3.11 e 3.12 via tur-repo)
   --rede              escuta em 0.0.0.0 (outros aparelhos da rede acessam) e liga API_REQUIRE_TOKEN
   --ollama            instala o Ollama no proprio Termux e baixa um modelo pequeno
@@ -296,6 +296,12 @@ main() {
         . "$DIR/.nexus-install"
         [ -n "${INSTALL_PYVER:-}" ] && PYVER="$INSTALL_PYVER"
         HOST="${INSTALL_HOST:-$HOST}"; PORT="${INSTALL_PORT:-$PORT}"
+        # migra as portas antigas (666/8666) para a 1666 fixa
+        case "$PORT" in 666|8666)
+            info "Porta antiga $PORT -> 1666 (lembre de apontar o bot para http://127.0.0.1:1666)."
+            PORT=1666
+            sed -i "s/^INSTALL_PORT=.*/INSTALL_PORT=\"1666\"/" "$DIR/.nexus-install" ;;
+        esac
         read_remote_version
         if [ "$FORCE" -eq 0 ] && [ "$(local_sha)" = "$REMOTE_SHA" ]; then
             ok "Ja esta na ultima versao ($(local_ver)). Use --forcar para reinstalar mesmo assim."
