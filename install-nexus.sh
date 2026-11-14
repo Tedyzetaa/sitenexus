@@ -151,6 +151,22 @@ fix_python_libs() { # o python3.11 do tur-repo exige uma libexpat mais nova que 
     info "Atualizando todos os pacotes do Termux (pode demorar)..."
     pkg upgrade -y -o Dpkg::Options::=--force-confold || true
     "$py" -c "import pyexpat" >/dev/null 2>&1 && { ok "pyexpat corrigido."; return 0; }
+    # ultimo recurso: o espelho do seu Termux esta defasado (libexpat < 2.9). Compila a libexpat atual.
+    warn "O repositorio do seu Termux so tem uma libexpat antiga demais para este Python (dica: termux-change-repo)."
+    if ask_yn "Compilar a libexpat 2.10.0 aqui (1 a 3 minutos) para corrigir?" s; then
+        pkg_install clang make curl tar || true
+        local b; b="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/expat_build.$$")"; mkdir -p "$b"
+        if fetch "https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.gz" 300 "$b/e.tgz" &&
+           tar -xzf "$b/e.tgz" -C "$b" &&
+           ( cd "$b/expat-2.10.0" &&
+             ./configure --prefix="${PREFIX:-/usr/local}" --without-docbook --without-examples --without-tests >"$b/conf.log" 2>&1 &&
+             make -j2 >"$b/make.log" 2>&1 && make install >"$b/inst.log" 2>&1 ); then
+            rm -rf "$b"
+            "$py" -c "import pyexpat" >/dev/null 2>&1 && { ok "libexpat 2.10.0 instalada; pyexpat corrigido."; return 0; }
+        else
+            tail -n 10 "$b"/*.log 2>/dev/null; rm -rf "$b"
+        fi
+    fi
     return 1
 }
 
