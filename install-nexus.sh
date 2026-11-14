@@ -441,13 +441,30 @@ main() {
         info "Reaproveitando a venv existente."
     else
         # sem --system-site-packages: as bibliotecas do pkg sao do Python do sistema, nao do $PYVER
-        "$PYEXE" -m venv "$DIR/venv" || die "Falha ao criar a venv."
+        # --without-pip: o ensurepip do python3.11 do tur-repo falha em alguns aparelhos; o pip entra logo abaixo
+        rm -rf "$DIR/venv"
+        "$PYEXE" -m venv --without-pip "$DIR/venv" || die "Falha ao criar a venv."
     fi
     if ! "$VPY" -m pip --version >/dev/null 2>&1; then
         info "Instalando o pip na venv..."
-        "$VPY" -m ensurepip --upgrade >/dev/null 2>&1 ||
-            { curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$VPY" >/dev/null 2>&1; } ||
-            die "Nao consegui instalar o pip na venv."
+        PIP_LOG="$SETUP/pip-bootstrap.log"; mkdir -p "$SETUP"
+        if "$VPY" -m ensurepip --upgrade --default-pip >"$PIP_LOG" 2>&1; then :
+        else
+            warn "ensurepip falhou (detalhe em $PIP_LOG); tentando o get-pip.py..."
+            tail -n 3 "$PIP_LOG" 2>/dev/null | sed 's/^/    /'
+            if fetch "https://bootstrap.pypa.io/get-pip.py" 120 "$SETUP/get-pip.py" &&
+               "$VPY" "$SETUP/get-pip.py" >>"$PIP_LOG" 2>&1; then :
+            else
+                warn "get-pip.py falhou; tentando o pip do pacote python-pip do Termux..."
+                pkg_install python-pip >>"$PIP_LOG" 2>&1 || true
+                if command -v pip >/dev/null 2>&1; then
+                    "$PYEXE" -m pip --version >/dev/null 2>&1 &&
+                        "$PYEXE" -m pip install -q --target "$DIR/venv/lib/python$PYVER/site-packages" pip setuptools wheel >>"$PIP_LOG" 2>&1 || true
+                fi
+                "$VPY" -m pip --version >/dev/null 2>&1 ||
+                    { tail -n 15 "$PIP_LOG" 2>/dev/null; die "Nao consegui instalar o pip na venv, veja o log acima."; }
+            fi
+        fi
     fi
     "$VPY" -m pip install -q --upgrade pip setuptools wheel >/dev/null 2>&1 || warn "Nao consegui atualizar o pip da venv - seguindo."
 
