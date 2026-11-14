@@ -447,26 +447,29 @@ main() {
     fi
     if ! "$VPY" -m pip --version >/dev/null 2>&1; then
         info "Instalando o pip na venv..."
-        PIP_LOG="$SETUP/pip-bootstrap.log"; mkdir -p "$SETUP"
-        if "$VPY" -m ensurepip --upgrade --default-pip >"$PIP_LOG" 2>&1; then :
-        else
-            warn "ensurepip falhou (detalhe em $PIP_LOG); tentando o get-pip.py..."
-            tail -n 3 "$PIP_LOG" 2>/dev/null | sed 's/^/    /'
-            if fetch "https://bootstrap.pypa.io/get-pip.py" 120 "$SETUP/get-pip.py" &&
-               "$VPY" "$SETUP/get-pip.py" >>"$PIP_LOG" 2>&1; then :
-            else
-                warn "get-pip.py falhou; tentando o pip do pacote python-pip do Termux..."
-                pkg_install python-pip >>"$PIP_LOG" 2>&1 || true
-                if command -v pip >/dev/null 2>&1; then
-                    "$PYEXE" -m pip --version >/dev/null 2>&1 &&
-                        "$PYEXE" -m pip install -q --target "$DIR/venv/lib/python$PYVER/site-packages" pip setuptools wheel >>"$PIP_LOG" 2>&1 || true
-                fi
-                "$VPY" -m pip --version >/dev/null 2>&1 ||
-                    { tail -n 15 "$PIP_LOG" 2>/dev/null; die "Nao consegui instalar o pip na venv, veja o log acima."; }
+        PIP_LOG="$SETUP/pip-bootstrap.log"; mkdir -p "$SETUP"; : >"$PIP_LOG"
+        # o pip 26.x (mais novo) quebra no Termux com TypeError no fim da instalacao: fixamos pip<26.
+        # O sucesso e medido por 'pip --version', nao pelo codigo de saida (o get-pip pode sair com ruido).
+        "$VPY" -m ensurepip --upgrade --default-pip >>"$PIP_LOG" 2>&1 || true
+        if ! "$VPY" -m pip --version >/dev/null 2>&1; then
+            warn "ensurepip nao funcionou; tentando o get-pip.py (pip<26)..."
+            if fetch "https://bootstrap.pypa.io/get-pip.py" 120 "$SETUP/get-pip.py"; then
+                "$VPY" "$SETUP/get-pip.py" "pip<26" setuptools wheel >>"$PIP_LOG" 2>&1 || true
             fi
         fi
+        if ! "$VPY" -m pip --version >/dev/null 2>&1; then
+            warn "get-pip.py nao funcionou; tentando o pacote python-pip do Termux..."
+            pkg_install python-pip >>"$PIP_LOG" 2>&1 || true
+            "$PYEXE" -m pip install -q --target "$DIR/venv/lib/python$PYVER/site-packages" "pip<26" setuptools wheel >>"$PIP_LOG" 2>&1 || true
+        fi
+        if ! "$VPY" -m pip --version >/dev/null 2>&1; then
+            echo "---- inicio do log do pip ----"; head -n 25 "$PIP_LOG" 2>/dev/null
+            echo "---- fim do log do pip ----";    tail -n 15 "$PIP_LOG" 2>/dev/null
+            rm -rf "$DIR/venv"
+            die "Nao consegui instalar o pip na venv (copie o log acima)."
+        fi
     fi
-    "$VPY" -m pip install -q --upgrade pip setuptools wheel >/dev/null 2>&1 || warn "Nao consegui atualizar o pip da venv - seguindo."
+    "$VPY" -m pip install -q --upgrade "pip<26" setuptools wheel >/dev/null 2>&1 || warn "Nao consegui atualizar o pip da venv - seguindo."
 
     ANDROID_API_LEVEL="$(getprop ro.build.version.sdk 2>/dev/null || true)"
     export ANDROID_API_LEVEL="${ANDROID_API_LEVEL:-24}"
