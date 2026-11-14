@@ -137,6 +137,23 @@ find_python() { # exige exatamente python$PYVER (com ssl e venv)
     return 1
 }
 
+fix_python_libs() { # o python3.11 do tur-repo exige uma libexpat mais nova que a instalada em alguns aparelhos
+    local py="$1"
+    "$py" -c "import pyexpat" >/dev/null 2>&1 && return 0
+    warn "O modulo pyexpat do Python nao carrega (libexpat do Termux incompativel/antiga). Corrigindo..."
+    command -v pkg >/dev/null 2>&1 || return 1
+    pkg update -y -o Dpkg::Options::=--force-confold >/dev/null 2>&1 || true
+    pkg_install libexpat || true
+    "$py" -c "import pyexpat" >/dev/null 2>&1 && { ok "libexpat atualizada."; return 0; }
+    info "Reinstalando libexpat e python$PYVER..."
+    pkg install -y --reinstall -o Dpkg::Options::=--force-confold libexpat "python$PYVER" || true
+    "$py" -c "import pyexpat" >/dev/null 2>&1 && { ok "pyexpat corrigido."; return 0; }
+    info "Atualizando todos os pacotes do Termux (pode demorar)..."
+    pkg upgrade -y -o Dpkg::Options::=--force-confold || true
+    "$py" -c "import pyexpat" >/dev/null 2>&1 && { ok "pyexpat corrigido."; return 0; }
+    return 1
+}
+
 install_python() {
     command -v pkg >/dev/null 2>&1 || return 1
     # o python 3.11 nao esta no repositorio principal do Termux: vem do tur-repo
@@ -379,6 +396,7 @@ main() {
             warn "Comando 'pkg' nao encontrado - pulando. Garanta python$PYVER (venv+pip)."
         fi
         find_python || die "Nao encontrei python$PYVER com venv/ssl. No Termux:  pkg install tur-repo && pkg install python$PYVER"
+        fix_python_libs "$PYEXE" || die "O pyexpat do python$PYVER continua quebrado. No Termux rode:  termux-change-repo  (escolha outro espelho), depois  pkg update && pkg upgrade -y  e rode este instalador de novo."
         ok "Python: $PYEXE ($("$PYEXE" -c 'import sys;print(sys.version.split()[0])'))"
     else
         step "2/7" "Pacotes (pulado: --atualizar)"
