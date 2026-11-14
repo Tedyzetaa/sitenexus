@@ -13,6 +13,20 @@ set -u
 SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")"
 TMP_BASE="${TMPDIR:-${PREFIX:-}/tmp}"
 [ -d "$TMP_BASE" ] || TMP_BASE="/tmp"
+
+# Se foi chamado via "curl ... | bash", o script nao e um arquivo (le do stdin) e nao
+# consegue extrair o pacote embutido. Entao baixa a si mesmo e reexecuta a partir do arquivo.
+if [ ! -f "$SELF" ]; then
+    AETHER_URL="${AETHER_URL:-https://raw.githubusercontent.com/Tedyzetaa/sitenexus/main/install-aether.sh}"
+    AETHER_COPY="$TMP_BASE/Instalar_Aether.sh"
+    echo "[*] Baixando o instalador completo..."
+    if curl -fsSL "$AETHER_URL" -o "$AETHER_COPY" 2>/dev/null && [ -s "$AETHER_COPY" ]; then
+        exec bash "$AETHER_COPY" "$@" </dev/tty 2>/dev/null || exec bash "$AETHER_COPY" "$@"
+    fi
+    echo "[X] Nao consegui baixar o instalador. Rode:"
+    echo "    curl -fsSL $AETHER_URL -o Instalar_Aether.sh && bash Instalar_Aether.sh"
+    exit 1
+fi
 SETUP="$TMP_BASE/aether_setup"
 export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
 export AETHER_ORIG_PWD="$PWD"
